@@ -20,8 +20,8 @@ const corsOptions = {
   origin: [
     "http://localhost:5173",
     // add production URLs later, e.g.:
-    // "https://nedaas-lab.web.app",
-    // "https://nedaas-lab.firebaseapp.com",
+     "https://nedaas-bf431.web.app/",
+    "nedaas-bf431.firebaseapp.com",
   ],
   credentials: true,
 };
