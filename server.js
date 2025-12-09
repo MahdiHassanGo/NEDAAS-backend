@@ -16,17 +16,21 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ---------- CORS CONFIG ----------
+// ...existing code...
 const corsOptions = {
   origin: [
     "http://localhost:5173",
-    // add production URLs later, e.g.:
-     "https://nedaas-bf431.web.app/",
-    "nedaas-bf431.firebaseapp.com",
+    // production origins (exact, no trailing slash)
+    "https://nedaas-bf431.web.app",
+    "https://nedaas-bf431.firebaseapp.com",
   ],
   credentials: true,
 };
+app.use(cors(corsOptions));
+// ...existing code...
 
 app.use(cors(corsOptions));
+
 app.use(express.json());
 
 // ---------- MONGODB CONNECTION ----------
