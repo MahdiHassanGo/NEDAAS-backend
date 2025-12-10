@@ -19,9 +19,14 @@ router.use(verifyFirebaseToken, requireAdmin);
 
 // GET /api/admin/users
 router.get("/users", async (req, res) => {
-  const users = await User.find({}, "email displayName role").sort({ email: 1 });
+  const users = await User.find(
+    {},
+    "email displayName role mobile studentId studentEmail"
+  ).sort({ email: 1 });
+
   res.json(users);
 });
+
 
 // PATCH /api/admin/users/:id/role
 router.patch("/users/:id/role", async (req, res) => {
@@ -51,6 +56,74 @@ router.patch("/users/:id/role", async (req, res) => {
 
   res.json(user);
 });
+// PUT /api/admin/users/:id - update basic user info (name + role)
+// PUT /api/admin/users/:id - update basic user info (name, email, phone, etc.)
+router.put("/users/:id", async (req, res) => {
+  const { displayName, role, email, mobile, studentId, studentEmail } = req.body;
+  const allowed = ["member", "lead", "advisor", "director", "admin"];
+
+  const user = await User.findById(req.params.id);
+
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  // Validate role if provided
+  if (role !== undefined && !allowed.includes(role)) {
+    return res.status(400).json({ message: "Invalid role" });
+  }
+
+  // Root admin protections
+  if (user.email === ROOT_ADMIN_EMAIL) {
+    // cannot change root admin's role away from admin
+    if (role && role !== "admin") {
+      return res.status(403).json({
+        message: "Root admin role is locked to 'admin' and cannot be changed.",
+      });
+    }
+
+    // cannot change root admin's email
+    if (email && email !== ROOT_ADMIN_EMAIL) {
+      return res.status(403).json({
+        message: "Root admin email is locked and cannot be changed.",
+      });
+    }
+  }
+
+  // If email is changing, ensure it's not used by someone else
+  if (email && email !== user.email) {
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: "Email already in use" });
+    }
+    user.email = email;
+  }
+
+  if (displayName !== undefined) {
+    user.displayName = displayName;
+  }
+
+  if (role !== undefined) {
+    user.role = user.email === ROOT_ADMIN_EMAIL ? "admin" : role;
+  }
+
+  if (mobile !== undefined) {
+    user.mobile = mobile;
+  }
+
+  if (studentId !== undefined) {
+    user.studentId = studentId;
+  }
+
+  if (studentEmail !== undefined) {
+    user.studentEmail = studentEmail;
+  }
+
+  await user.save();
+  res.json(user);
+});
+
+
 
 // POST /api/admin/users/manual
 router.post("/users/manual", async (req, res) => {
