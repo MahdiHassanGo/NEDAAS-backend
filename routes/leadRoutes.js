@@ -2,6 +2,7 @@
 import express from "express";
 import User from "../models/User.js";
 import Conference from "../models/Conference.js";
+import Author from "../models/Author.js";
 import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -22,20 +23,25 @@ function requireLead(req, res, next) {
 
 // GET /api/lead/team
 router.get("/team", requireLead, async (req, res) => {
-  const lead = await User.findById(req.user._id);
+  try {
+    const lead = await User.findById(req.user._id);
 
-  const members = await User.find({ lead: lead._id }).select(
-    "displayName email mobile studentId studentEmail"
-  );
+    const members = await User.find({ lead: lead._id }).select(
+      "displayName email mobile studentId studentEmail"
+    );
 
-  res.json({
-    lead: {
-      _id: lead._id,
-      displayName: lead.displayName,
-      email: lead.email,
-    },
-    members,
-  });
+    res.json({
+      lead: {
+        _id: lead._id,
+        displayName: lead.displayName,
+        email: lead.email,
+      },
+      members,
+    });
+  } catch (err) {
+    console.error("Error loading team:", err);
+    res.status(500).json({ message: "Failed to load team" });
+  }
 });
 
 // POST /api/lead/members
@@ -130,56 +136,147 @@ router.put("/members/:memberId", requireLead, async (req, res) => {
 });
 
 /* ============================
+ * AUTHORS (LEAD SIDE)
+ * ==========================*/
+
+// GET /api/lead/authors  → list authors created by this lead
+router.get("/authors", requireLead, async (req, res) => {
+  try {
+    const authors = await Author.find({ lead: req.user._id }).sort({
+      createdAt: -1,
+    });
+    res.json(authors);
+  } catch (err) {
+    console.error("Error loading authors:", err);
+    res.status(500).json({ message: "Failed to load authors" });
+  }
+});
+
+// POST /api/lead/authors  → create a new author under this lead
+router.post("/authors", requireLead, async (req, res) => {
+  try {
+    const { name, email, affiliation } = req.body;
+    if (!name) {
+      return res.status(400).json({ message: "Author name is required" });
+    }
+
+    const author = await Author.create({
+      lead: req.user._id,
+      name,
+      email: email || "",
+      affiliation: affiliation || "",
+    });
+
+    res.status(201).json(author);
+  } catch (err) {
+    console.error("Error creating author:", err);
+    res.status(500).json({ message: "Failed to create author" });
+  }
+});
+
+// PUT /api/lead/authors/:id  → update an author owned by this lead
+router.put("/authors/:id", requireLead, async (req, res) => {
+  const { id } = req.params;
+  const { name, email, affiliation } = req.body;
+
+  try {
+    const author = await Author.findOneAndUpdate(
+      { _id: id, lead: req.user._id },
+      {
+        ...(name !== undefined && { name }),
+        ...(email !== undefined && { email }),
+        ...(affiliation !== undefined && { affiliation }),
+      },
+      { new: true }
+    );
+
+    if (!author) {
+      return res
+        .status(404)
+        .json({ message: "Author not found for this lead" });
+    }
+
+    res.json(author);
+  } catch (err) {
+    console.error("Error updating author:", err);
+    res.status(500).json({ message: "Failed to update author" });
+  }
+});
+
+/* ============================
  * CONFERENCES (LEAD SIDE)
  * ==========================*/
 
 // GET /api/lead/conferences
 router.get("/conferences", requireLead, async (req, res) => {
-  const confs = await Conference.find({ lead: req.user._id }).populate(
-    "authors",
-    "displayName email"
-  );
-  res.json(confs);
+  try {
+    const confs = await Conference.find({ lead: req.user._id })
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
+
+    res.json(confs);
+  } catch (err) {
+    console.error("Error loading conferences:", err);
+    res.status(500).json({ message: "Failed to load conferences" });
+  }
 });
 
 // POST /api/lead/conferences
 router.post("/conferences", requireLead, async (req, res) => {
-  const { title, date, link, authorIds } = req.body;
+  try {
+    const { title, date, link, authorIds, extraAuthorIds } = req.body;
 
-  const conf = await Conference.create({
-    title,
-    date,
-    link,
-    lead: req.user._id,
-    authors: authorIds || [],
-    status: "submitted",
-  });
+    const conf = await Conference.create({
+      title,
+      date,
+      link,
+      lead: req.user._id,
+      authors: authorIds || [],
+      extraAuthors: extraAuthorIds || [],
+      status: "submitted",
+    });
 
-  res.status(201).json(conf);
+    const populated = await Conference.findById(conf._id)
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
+
+    res.status(201).json(populated);
+  } catch (err) {
+    console.error("Error creating conference:", err);
+    res.status(500).json({ message: "Failed to create conference" });
+  }
 });
 
 // PUT /api/lead/conferences/:id
 router.put("/conferences/:id", requireLead, async (req, res) => {
   const { id } = req.params;
-  const { title, date, link, authorIds, status } = req.body;
+  const { title, date, link, authorIds, extraAuthorIds, status } = req.body;
 
-  const conf = await Conference.findOneAndUpdate(
-    { _id: id, lead: req.user._id }, // ensure lead owns it
-    {
-      ...(title && { title }),
-      ...(date && { date }),
-      ...(link && { link }),
-      ...(authorIds && { authors: authorIds }),
-      ...(status && { status }),
-    },
-    { new: true }
-  ).populate("authors", "displayName email");
+  try {
+    const conf = await Conference.findOneAndUpdate(
+      { _id: id, lead: req.user._id }, // ensure lead owns it
+      {
+        ...(title !== undefined && { title }),
+        ...(date !== undefined && { date }),
+        ...(link !== undefined && { link }),
+        ...(authorIds !== undefined && { authors: authorIds }),
+        ...(extraAuthorIds !== undefined && { extraAuthors: extraAuthorIds }),
+        ...(status !== undefined && { status }),
+      },
+      { new: true }
+    )
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
 
-  if (!conf) {
-    return res.status(404).json({ message: "Conference not found" });
+    if (!conf) {
+      return res.status(404).json({ message: "Conference not found" });
+    }
+
+    res.json(conf);
+  } catch (err) {
+    console.error("Error updating conference:", err);
+    res.status(500).json({ message: "Failed to update conference" });
   }
-
-  res.json(conf);
 });
 
 export default router;
