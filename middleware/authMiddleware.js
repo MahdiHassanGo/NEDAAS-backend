@@ -2,7 +2,7 @@
 import admin from "../firebaseAdmin.js";
 import User from "../models/User.js";
 
-export async function verifyFirebaseToken(req, res, next) {
+async function verifyFirebaseToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith("Bearer ")) {
@@ -35,9 +35,7 @@ export async function verifyFirebaseToken(req, res, next) {
       }
     }
 
-    // 4) If still not found, you can either:
-    //    a) auto-create a default "member" user (below), OR
-    //    b) return 401. I recommend auto-create to make life easier.
+    // 4) Auto-create default "member" user if nothing found
     if (!user) {
       console.log(
         `⚠️ No user found for uid=${uid} email=${email}, creating default user`
@@ -50,7 +48,7 @@ export async function verifyFirebaseToken(req, res, next) {
       });
     }
 
-    // 5) Attach full Mongoose doc to req.user (as before)
+    // 5) Attach full Mongoose doc to req.user
     req.user = user;
     next();
   } catch (err) {
@@ -59,9 +57,36 @@ export async function verifyFirebaseToken(req, res, next) {
   }
 }
 
-export function requireAdmin(req, res, next) {
+function requireAdmin(req, res, next) {
   if (!req.user || req.user.role !== "admin") {
     return res.status(403).json({ message: "Admin access required" });
   }
   next();
 }
+
+function requireDirector(req, res, next) {
+  if (!req.user || req.user.role !== "director") {
+    return res.status(403).json({ message: "Director access required" });
+  }
+  next();
+}
+
+function requireAdminOrDirector(req, res, next) {
+  if (
+    !req.user ||
+    (req.user.role !== "admin" && req.user.role !== "director")
+  ) {
+    return res
+      .status(403)
+      .json({ message: "Admin or director access required" });
+  }
+  next();
+}
+
+// 👉 Explicit named exports so Node can see them for sure
+export {
+  verifyFirebaseToken,
+  requireAdmin,
+  requireDirector,
+  requireAdminOrDirector,
+};

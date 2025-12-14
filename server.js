@@ -12,25 +12,21 @@ import adminRoutes from "./routes/adminRoutes.js";
 import publicationRoutes from "./routes/publicationRoutes.js";
 import leadRoutes from "./routes/leadRoutes.js";
 import leadPublicationRoutes from "./routes/leadPublicationRoutes.js";
+import directorRoutes from "./routes/directorRoutes.js";
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ---------- CORS CONFIG ----------
-// ...existing code...
 const corsOptions = {
   origin: [
     "http://localhost:5173",
-    // production origins (exact, no trailing slash)
     "https://nedaas-bf431.web.app",
     "https://nedaas-bf431.firebaseapp.com",
   ],
   credentials: true,
 };
 app.use(cors(corsOptions));
-// ...existing code...
-
-app.use(cors(corsOptions));
-
 app.use(express.json());
 
 // ---------- MONGODB CONNECTION ----------
@@ -66,11 +62,13 @@ app.get("/status", (req, res) => {
   });
 });
 
-// ---------- API ROUTES ----------
+// ---------- API ROUTES (single block) ----------
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/publications", publicationRoutes);
-app.use("/api/lead", leadRoutes); // 👈 mount all /api/lead/* routes here
+app.use("/api/lead", leadRoutes);
+app.use("/api/lead/publications", leadPublicationRoutes);
+app.use("/api/director", directorRoutes); // 👈 important
 
 // ---------- GLOBAL ERROR HANDLER ----------
 app.use((err, req, res, next) => {
@@ -81,12 +79,6 @@ app.use((err, req, res, next) => {
     ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
   });
 });
-// ---------- API ROUTES ----------
-app.use("/api/auth", authRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/publications", publicationRoutes);
-app.use("/api/lead", leadRoutes);
-app.use("/api/lead/publications", leadPublicationRoutes); // 👈 ADD THIS
 
 // ---------- START SERVER ----------
 async function startServer() {

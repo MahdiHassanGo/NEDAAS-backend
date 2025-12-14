@@ -1,12 +1,14 @@
-// backend/routes/adminRoutes.js
+
+
+
+
+
+
 import express from "express";
-import User from "../models/User.js";
-import Publication from "../models/Publication.js";
-import {
-  verifyFirebaseToken,
-  requireAdmin,
-} from "../middleware/authMiddleware.js";
+import { verifyFirebaseToken, requireAdmin } from "../middleware/authMiddleware.js";
 import Conference from "../models/Conference.js";
+import Publication from "../models/Publication.js";
+import User from "../models/User.js";
 
 
 const router = express.Router();
@@ -27,6 +29,15 @@ router.get("/users", async (req, res) => {
   res.json(users);
 });
 
+// GET /api/admin/conferences
+router.get("/conferences", requireAdmin, async (req, res) => {
+  const confs = await Conference.find()
+    .populate("lead", "displayName email")
+    .populate("authors", "displayName email")
+    .populate("extraAuthors", "name email affiliation");
+
+  res.json(confs);
+});
 
 // PATCH /api/admin/users/:id/role
 router.patch("/users/:id/role", async (req, res) => {
