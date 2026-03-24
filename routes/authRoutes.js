@@ -1,4 +1,3 @@
-// backend/routes/authRoutes.js
 import express from "express";
 import mongoose from "mongoose";
 import admin from "../firebaseAdmin.js";
@@ -7,7 +6,6 @@ import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// ---------- CONSTANTS ----------
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || "mahdiasif78@gmail.com")
     .split(",")
@@ -15,7 +13,6 @@ const ADMIN_EMAILS = new Set(
     .filter(Boolean)
 );
 
-// ---------- HELPERS ----------
 function isMongoConnected() {
   return mongoose.connection.readyState === 1;
 }
@@ -24,9 +21,6 @@ function isAdminEmail(email) {
   return ADMIN_EMAILS.has(email?.toLowerCase());
 }
 
-// ---------- ROUTES ----------
-
-// POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
     const { idToken } = req.body;
@@ -36,17 +30,13 @@ router.post("/login", async (req, res) => {
     }
 
     if (!admin.apps.length) {
-      console.error("❌ Firebase Admin not initialized");
       return res.status(500).json({ message: "Auth service unavailable" });
     }
 
-    // Verify Firebase ID token (also checks revocation)
     let decodedToken;
     try {
       decodedToken = await admin.auth().verifyIdToken(idToken, true);
     } catch (firebaseError) {
-      // Don't leak firebase error details to clients
-      console.error("❌ Firebase token error:", firebaseError.code);
       return res.status(401).json({
         message:
           firebaseError.code === "auth/id-token-expired"
@@ -62,40 +52,49 @@ router.post("/login", async (req, res) => {
     }
 
     if (!isMongoConnected()) {
-      console.error("❌ MongoDB not connected");
       return res.status(500).json({ message: "Database unavailable" });
     }
 
-    const adminFlag = isAdminEmail(email);
+    const normalizedEmail = email.toLowerCase();
+    const adminFlag = isAdminEmail(normalizedEmail);
 
-    let user;
-    try {
-      user = await User.findOne({ email });
+    let user = await User.findOne({ email: normalizedEmail });
 
-      if (!user) {
-        user = new User({
-          uid,
-          email,
-          displayName: name || null,
-          role: adminFlag ? "admin" : "member",
-        });
-        await user.save();
-      } else {
-        let changed = false;
-        if (!user.uid && uid) { user.uid = uid; changed = true; }
-        if (adminFlag && user.role !== "admin") { user.role = "admin"; changed = true; }
-        if (!user.displayName && name) { user.displayName = name; changed = true; }
-        if (changed) await user.save();
+    if (!user) {
+      user = new User({
+        uid,
+        email: normalizedEmail,
+        displayName: name || null,
+        role: adminFlag ? "admin" : "member",
+      });
+      await user.save();
+    } else {
+      let changed = false;
+
+      if (!user.uid && uid) {
+        user.uid = uid;
+        changed = true;
       }
-    } catch (dbError) {
-      console.error("❌ DB error during login:", dbError.message);
-      return res.status(500).json({ message: "Database error" });
+
+      if (adminFlag && user.role !== "admin") {
+        user.role = "admin";
+        changed = true;
+      }
+
+      if (!user.displayName && name) {
+        user.displayName = name;
+        changed = true;
+      }
+
+      if (changed) {
+        await user.save();
+      }
     }
 
-    // Only return what the client actually needs
     return res.status(200).json({
       message: "Login successful",
       user: {
+        _id: user._id,
         email: user.email,
         displayName: user.displayName,
         role: user.role,
@@ -107,7 +106,6 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// GET /api/auth/me
 router.get("/me", verifyFirebaseToken, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
