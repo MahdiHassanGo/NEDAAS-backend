@@ -2,6 +2,12 @@
 import admin from "../firebaseAdmin.js";
 import User from "../models/User.js";
 
+const ROOT_ADMIN_EMAIL = (
+  process.env.ROOT_ADMIN_EMAIL || "mahdiasif78@gmail.com"
+)
+  .trim()
+  .toLowerCase();
+
 async function verifyFirebaseToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
@@ -15,29 +21,40 @@ async function verifyFirebaseToken(req, res, next) {
     const decoded = await admin.auth().verifyIdToken(token);
     const { uid, email, name } = decoded;
 
+    const normalizedEmail = email?.trim().toLowerCase() || "";
+    const autoRole = normalizedEmail === ROOT_ADMIN_EMAIL ? "admin" : "member";
+
     let user = null;
 
     if (uid) {
       user = await User.findOne({ uid });
     }
 
-    if (!user && email) {
-      user = await User.findOne({ email: email.toLowerCase() });
+    if (!user && normalizedEmail) {
+      user = await User.findOne({ email: normalizedEmail });
 
       if (user && uid && !user.uid) {
         user.uid = uid;
-        await user.save();
-        console.log(`Linked Firebase UID for user ${email}`);
       }
     }
 
     if (!user) {
       user = await User.create({
         uid,
-        email: email?.toLowerCase() || "",
-        displayName: name || email || "Unnamed User",
-        role: "member",
+        email: normalizedEmail,
+        displayName: name || normalizedEmail || "Unnamed User",
+        role: autoRole,
       });
+    } else {
+      // keep root admin always admin
+      if (normalizedEmail === ROOT_ADMIN_EMAIL && user.role !== "admin") {
+        user.role = "admin";
+      }
+
+      if (!user.email && normalizedEmail) user.email = normalizedEmail;
+      if (!user.displayName && name) user.displayName = name;
+
+      await user.save();
     }
 
     req.user = user;
@@ -70,13 +87,8 @@ function requireDirector(req, res, next) {
 }
 
 function requireAdminOrDirector(req, res, next) {
-  if (
-    !req.user ||
-    !["admin", "director"].includes(req.user.role)
-  ) {
-    return res
-      .status(403)
-      .json({ message: "Admin or director access required" });
+  if (!req.user || !["admin", "director"].includes(req.user.role)) {
+    return res.status(403).json({ message: "Admin or director access required" });
   }
   next();
 }
