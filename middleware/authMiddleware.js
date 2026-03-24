@@ -12,43 +12,34 @@ async function verifyFirebaseToken(req, res, next) {
   const token = authHeader.split(" ")[1];
 
   try {
-    // 1) Verify Firebase token
     const decoded = await admin.auth().verifyIdToken(token);
     const { uid, email, name } = decoded;
 
     let user = null;
 
-    // 2) Try to find by uid first
     if (uid) {
       user = await User.findOne({ uid });
     }
 
-    // 3) If not found, try to find by email (manual users, etc.)
     if (!user && email) {
-      user = await User.findOne({ email });
+      user = await User.findOne({ email: email.toLowerCase() });
 
-      // If found by email but no uid yet, link them now
       if (user && uid && !user.uid) {
         user.uid = uid;
         await user.save();
-        console.log(`🔗 Linked Firebase UID for user ${email}`);
+        console.log(`Linked Firebase UID for user ${email}`);
       }
     }
 
-    // 4) Auto-create default "member" user if nothing found
     if (!user) {
-      console.log(
-        `⚠️ No user found for uid=${uid} email=${email}, creating default user`
-      );
       user = await User.create({
         uid,
-        email,
+        email: email?.toLowerCase() || "",
         displayName: name || email || "Unnamed User",
         role: "member",
       });
     }
 
-    // 5) Attach full Mongoose doc to req.user
     req.user = user;
     next();
   } catch (err) {
@@ -64,8 +55,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireLead(req, res, next) {
+  if (!req.user || !["lead", "admin"].includes(req.user.role)) {
+    return res.status(403).json({ message: "Lead access required" });
+  }
+  next();
+}
+
 function requireDirector(req, res, next) {
-  if (!req.user || req.user.role !== "director") {
+  if (!req.user || !["director", "admin"].includes(req.user.role)) {
     return res.status(403).json({ message: "Director access required" });
   }
   next();
@@ -74,7 +72,7 @@ function requireDirector(req, res, next) {
 function requireAdminOrDirector(req, res, next) {
   if (
     !req.user ||
-    (req.user.role !== "admin" && req.user.role !== "director")
+    !["admin", "director"].includes(req.user.role)
   ) {
     return res
       .status(403)
@@ -83,10 +81,10 @@ function requireAdminOrDirector(req, res, next) {
   next();
 }
 
-// 👉 Explicit named exports so Node can see them for sure
 export {
   verifyFirebaseToken,
   requireAdmin,
+  requireLead,
   requireDirector,
   requireAdminOrDirector,
 };

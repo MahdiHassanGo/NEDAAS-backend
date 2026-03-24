@@ -1,189 +1,240 @@
-
-
-
-
-
-
+// backend/routes/adminRoutes.js
 import express from "express";
-import { verifyFirebaseToken, requireAdmin } from "../middleware/authMiddleware.js";
+import mongoose from "mongoose";
+import {
+  verifyFirebaseToken,
+  requireAdmin,
+} from "../middleware/authMiddleware.js";
 import Conference from "../models/Conference.js";
 import Publication from "../models/Publication.js";
 import User from "../models/User.js";
 
-
 const router = express.Router();
 
-// --------- CONFIG: ROOT ADMIN -----------
-const ROOT_ADMIN_EMAIL = "mahdiasif78@gmail.com";
+// ---------- CONFIG ----------
+const ROOT_ADMIN_EMAIL = process.env.ROOT_ADMIN_EMAIL || "mahdiasif78@gmail.com";
+const ALLOWED_ROLES = ["member", "lead", "advisor", "director", "admin"];
 
-// All routes here require admin
+// All routes require authentication + admin role
 router.use(verifyFirebaseToken, requireAdmin);
+
+// ---------- HELPERS ----------
+function isValidObjectId(id) {
+  return mongoose.Types.ObjectId.isValid(id);
+}
+
+function badId(res) {
+  return res.status(400).json({ message: "Invalid ID format" });
+}
+
+// ========== USERS ==========
 
 // GET /api/admin/users
 router.get("/users", async (req, res) => {
-  const users = await User.find(
-    {},
-    "email displayName role mobile studentId studentEmail"
-  ).sort({ email: 1 });
-
-  res.json(users);
-});
-
-// GET /api/admin/conferences
-router.get("/conferences", requireAdmin, async (req, res) => {
-  const confs = await Conference.find()
-    .populate("lead", "displayName email")
-    .populate("authors", "displayName email")
-    .populate("extraAuthors", "name email affiliation");
-
-  res.json(confs);
+  try {
+    const users = await User.find(
+      {},
+      "email displayName role mobile studentId studentEmail"
+    ).sort({ email: 1 });
+    res.json(users);
+  } catch (err) {
+    console.error("Get users error:", err.message);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
 });
 
 // PATCH /api/admin/users/:id/role
 router.patch("/users/:id/role", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
   const { role } = req.body;
-  const allowed = ["member", "lead", "advisor", "director", "admin"];
 
-  if (!allowed.includes(role)) {
+  if (!role || !ALLOWED_ROLES.includes(role)) {
     return res.status(400).json({ message: "Invalid role" });
   }
 
-  // Find user first, so we can check email
-  const user = await User.findById(req.params.id);
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
+    if (user.email === ROOT_ADMIN_EMAIL && role !== "admin") {
+      return res.status(403).json({ message: "Root admin role is locked" });
+    }
+
+    user.role = role;
+    await user.save();
+    res.json({ _id: user._id, email: user.email, role: user.role });
+  } catch (err) {
+    console.error("Patch role error:", err.message);
+    res.status(500).json({ message: "Failed to update role" });
   }
-
-  // ❌ Do not allow changing root admin's role
-  if (user.email === ROOT_ADMIN_EMAIL && role !== "admin") {
-    return res.status(403).json({
-      message: "This user is locked as default admin and cannot be changed.",
-    });
-  }
-
-  user.role = role; // safe to change
-  await user.save();
-
-  res.json(user);
 });
-// PUT /api/admin/users/:id - update basic user info (name + role)
-// PUT /api/admin/users/:id - update basic user info (name, email, phone, etc.)
+
+// PUT /api/admin/users/:id
 router.put("/users/:id", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
+  // Destructure only the fields we expect; ignore anything else
   const { displayName, role, email, mobile, studentId, studentEmail } = req.body;
-  const allowed = ["member", "lead", "advisor", "director", "admin"];
 
-  const user = await User.findById(req.params.id);
-
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
-  }
-
-  // Validate role if provided
-  if (role !== undefined && !allowed.includes(role)) {
+  if (role !== undefined && !ALLOWED_ROLES.includes(role)) {
     return res.status(400).json({ message: "Invalid role" });
   }
 
-  // Root admin protections
-  if (user.email === ROOT_ADMIN_EMAIL) {
-    // cannot change root admin's role away from admin
-    if (role && role !== "admin") {
-      return res.status(403).json({
-        message: "Root admin role is locked to 'admin' and cannot be changed.",
-      });
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Root admin protections
+    if (user.email === ROOT_ADMIN_EMAIL) {
+      if (role && role !== "admin") {
+        return res.status(403).json({ message: "Root admin role is locked to 'admin'" });
+      }
+      if (email && email !== ROOT_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Root admin email is locked" });
+      }
     }
 
-    // cannot change root admin's email
-    if (email && email !== ROOT_ADMIN_EMAIL) {
-      return res.status(403).json({
-        message: "Root admin email is locked and cannot be changed.",
-      });
+    // Prevent email hijacking by another existing user
+    if (email && email !== user.email) {
+      const conflict = await User.findOne({ email });
+      if (conflict) return res.status(400).json({ message: "Email already in use" });
+      user.email = email;
     }
-  }
 
-  // If email is changing, ensure it's not used by someone else
-  if (email && email !== user.email) {
-    const existing = await User.findOne({ email });
-    if (existing) {
-      return res.status(400).json({ message: "Email already in use" });
-    }
-    user.email = email;
-  }
+    if (displayName !== undefined) user.displayName = displayName.slice(0, 100);
+    if (role !== undefined) user.role = user.email === ROOT_ADMIN_EMAIL ? "admin" : role;
+    if (mobile !== undefined) user.mobile = mobile.slice(0, 20);
+    if (studentId !== undefined) user.studentId = studentId.slice(0, 50);
+    if (studentEmail !== undefined) user.studentEmail = studentEmail.slice(0, 200);
 
-  if (displayName !== undefined) {
-    user.displayName = displayName;
+    await user.save();
+    res.json(user);
+  } catch (err) {
+    console.error("Put user error:", err.message);
+    res.status(500).json({ message: "Failed to update user" });
   }
-
-  if (role !== undefined) {
-    user.role = user.email === ROOT_ADMIN_EMAIL ? "admin" : role;
-  }
-
-  if (mobile !== undefined) {
-    user.mobile = mobile;
-  }
-
-  if (studentId !== undefined) {
-    user.studentId = studentId;
-  }
-
-  if (studentEmail !== undefined) {
-    user.studentEmail = studentEmail;
-  }
-
-  await user.save();
-  res.json(user);
 });
-
-
 
 // POST /api/admin/users/manual
 router.post("/users/manual", async (req, res) => {
   const { email, displayName, role } = req.body;
 
-  if (!email || !role) {
-    return res
-      .status(400)
-      .json({ message: "Email and role are required" });
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ message: "Valid email is required" });
+  }
+  if (!role || !ALLOWED_ROLES.includes(role)) {
+    return res.status(400).json({ message: "Valid role is required" });
   }
 
-  const allowed = ["member", "lead", "advisor", "director", "admin"];
-  if (!allowed.includes(role)) {
-    return res.status(400).json({ message: "Invalid role" });
-  }
+  const normalizedEmail = email.trim().toLowerCase();
+  const finalRole = normalizedEmail === ROOT_ADMIN_EMAIL ? "admin" : role;
 
-  // If this is the root admin email, FORCE role = "admin"
-  const finalRole =
-    email === ROOT_ADMIN_EMAIL ? "admin" : role;
+  try {
+    let user = await User.findOne({ email: normalizedEmail });
 
-  let user = await User.findOne({ email });
-
-  if (user) {
-    // Existing user → update role (respecting root admin lock)
-    if (email === ROOT_ADMIN_EMAIL && user.role !== "admin") {
-      user.role = "admin"; // enforce admin
+    if (user) {
+      user.role = normalizedEmail === ROOT_ADMIN_EMAIL ? "admin" : finalRole;
+      if (displayName) user.displayName = displayName.slice(0, 100);
+      await user.save();
     } else {
-      user.role = finalRole;
+      user = await User.create({
+        email: normalizedEmail,
+        displayName: displayName ? displayName.slice(0, 100) : null,
+        role: finalRole,
+        uid: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
     }
 
-    if (displayName) user.displayName = displayName;
-    await user.save();
-  } else {
-    // New user → create with enforced role
-    user = await User.create({
-      email,
-      displayName: displayName || null,
-      role: finalRole,
-      uid:
-        email === ROOT_ADMIN_EMAIL
-          ? `root-admin-${Date.now()}`
-          : `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    });
+    res.status(201).json(user);
+  } catch (err) {
+    console.error("Manual user error:", err.message);
+    res.status(500).json({ message: "Failed to create/update user" });
   }
-
-  res.status(201).json(user);
 });
 
-// GET /api/admin/publications - Get all publications for admin review
+// ========== TEAMS ==========
+
+// GET /api/admin/teams
+router.get("/teams", async (req, res) => {
+  try {
+    const leads = await User.find({ role: "lead" }, "_id displayName email");
+    const leadIds = leads.map((l) => l._id);
+    const members = await User.find({ lead: { $in: leadIds } });
+
+    const grouped = leads.map((lead) => ({
+      lead,
+      members: members.filter(
+        (m) => m.lead && m.lead.toString() === lead._id.toString()
+      ),
+    }));
+
+    res.json(grouped);
+  } catch (err) {
+    console.error("Get teams error:", err.message);
+    res.status(500).json({ message: "Failed to fetch teams" });
+  }
+});
+
+// POST /api/admin/teams/assign-member
+router.post("/teams/assign-member", async (req, res) => {
+  const { memberId, leadId } = req.body;
+
+  if (!isValidObjectId(memberId) || !isValidObjectId(leadId)) {
+    return res.status(400).json({ message: "Valid memberId and leadId are required" });
+  }
+
+  try {
+    const [member, lead] = await Promise.all([
+      User.findById(memberId),
+      User.findById(leadId),
+    ]);
+
+    if (!member || !lead) {
+      return res.status(404).json({ message: "Member or Lead not found" });
+    }
+    if (lead.role !== "lead") {
+      return res.status(400).json({ message: "Target user is not a lead" });
+    }
+
+    member.lead = lead._id;
+    await member.save();
+    res.json(member);
+  } catch (err) {
+    console.error("Assign member error:", err.message);
+    res.status(500).json({ message: "Failed to assign member" });
+  }
+});
+
+// PUT /api/admin/teams/members/:memberId
+router.put("/teams/members/:memberId", async (req, res) => {
+  if (!isValidObjectId(req.params.memberId)) return badId(res);
+
+  const { displayName, mobile, studentId, studentEmail } = req.body;
+
+  try {
+    const member = await User.findByIdAndUpdate(
+      req.params.memberId,
+      {
+        ...(displayName !== undefined && { displayName: displayName.slice(0, 100) }),
+        ...(mobile !== undefined && { mobile: mobile.slice(0, 20) }),
+        ...(studentId !== undefined && { studentId: studentId.slice(0, 50) }),
+        ...(studentEmail !== undefined && { studentEmail: studentEmail.slice(0, 200) }),
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!member) return res.status(404).json({ message: "Member not found" });
+    res.json(member);
+  } catch (err) {
+    console.error("Update team member error:", err.message);
+    res.status(500).json({ message: "Failed to update member" });
+  }
+});
+
+// ========== PUBLICATIONS ==========
+
+// GET /api/admin/publications
 router.get("/publications", async (req, res) => {
   try {
     const publications = await Publication.find()
@@ -191,19 +242,19 @@ router.get("/publications", async (req, res) => {
       .sort({ createdAt: -1 });
     res.json(publications);
   } catch (err) {
-    console.error("Get publications error:", err);
-    res.status(500).json({
-      message: "Failed to fetch publications",
-      error: err.message,
-    });
+    console.error("Get publications error:", err.message);
+    res.status(500).json({ message: "Failed to fetch publications" });
   }
 });
 
 // POST /api/admin/publications
 router.post("/publications", async (req, res) => {
   try {
-    const { meta, title, authors, description, tag, link, linkLabel } =
-      req.body;
+    const { meta, title, authors, description, tag, link, linkLabel } = req.body;
+
+    if (!meta || !title || !authors || !description || !tag || !link) {
+      return res.status(400).json({ message: "All required fields must be provided" });
+    }
 
     const pub = await Publication.create({
       meta,
@@ -212,165 +263,98 @@ router.post("/publications", async (req, res) => {
       description,
       tag,
       link,
-      linkLabel,
-      status: "approved", // since admin adds it
+      linkLabel: linkLabel || "View article",
+      status: "approved",
       createdBy: req.user._id,
     });
 
     res.status(201).json(pub);
   } catch (err) {
-    console.error("Create publication error:", err);
-    res.status(400).json({ message: "Invalid data", error: err.message });
+    console.error("Create publication error:", err.message);
+    res.status(400).json({ message: "Invalid publication data" });
   }
 });
 
-// PATCH /api/admin/publications/:id/status - Update publication status
+// PATCH /api/admin/publications/:id/status
 router.patch("/publications/:id/status", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
+  const { status } = req.body;
+  const ALLOWED_STATUSES = ["pending", "approved", "rejected"];
+
+  if (!status || !ALLOWED_STATUSES.includes(status)) {
+    return res.status(400).json({ message: "Invalid status" });
+  }
+
   try {
-    const { status } = req.body;
-    const allowed = ["pending", "approved", "rejected"];
-
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
-    }
-
     const pub = await Publication.findByIdAndUpdate(
       req.params.id,
       { status },
       { new: true }
     ).populate("createdBy", "email displayName");
 
-    if (!pub) {
-      return res.status(404).json({ message: "Publication not found" });
-    }
-
+    if (!pub) return res.status(404).json({ message: "Publication not found" });
     res.json(pub);
   } catch (err) {
-    console.error("Update publication status error:", err);
-    res.status(500).json({
-      message: "Failed to update status",
-      error: err.message,
-    });
+    console.error("Update publication status error:", err.message);
+    res.status(500).json({ message: "Failed to update status" });
   }
 });
 
-// PUT /api/admin/publications/:id - Edit publication
+// PUT /api/admin/publications/:id
 router.put("/publications/:id", async (req, res) => {
-  try {
-    const { meta, title, authors, description, tag, link, linkLabel } =
-      req.body;
+  if (!isValidObjectId(req.params.id)) return badId(res);
 
+  const { meta, title, authors, description, tag, link, linkLabel } = req.body;
+
+  try {
     const pub = await Publication.findByIdAndUpdate(
       req.params.id,
-      {
-        meta,
-        title,
-        authors,
-        description,
-        tag,
-        link,
-        linkLabel,
-      },
+      { meta, title, authors, description, tag, link, linkLabel },
       { new: true, runValidators: true }
     ).populate("createdBy", "email displayName");
 
-    if (!pub) {
-      return res.status(404).json({ message: "Publication not found" });
-    }
-
+    if (!pub) return res.status(404).json({ message: "Publication not found" });
     res.json(pub);
   } catch (err) {
-    console.error("Update publication error:", err);
-    res.status(400).json({ message: "Invalid data", error: err.message });
+    console.error("Update publication error:", err.message);
+    res.status(400).json({ message: "Invalid publication data" });
   }
 });
 
-export default router;
-
-// ========== TEAM ROUTES (ADMIN) ==========
-
-// GET /api/admin/teams
-router.get("/teams", async (req, res) => {
-  const leads = await User.find({ role: "lead" });
-  const leadIds = leads.map((l) => l._id);
-
-  const members = await User.find({ lead: { $in: leadIds } });
-
-  const grouped = leads.map((lead) => ({
-    lead,
-    members: members.filter(
-      (m) => m.lead && m.lead.toString() === lead._id.toString()
-    ),
-  }));
-
-  res.json(grouped);
-});
-
-// POST /api/admin/teams/assign-member
-router.post("/teams/assign-member", async (req, res) => {
-  const { memberId, leadId } = req.body;
-  if (!memberId || !leadId) {
-    return res
-      .status(400)
-      .json({ message: "memberId and leadId are required" });
-  }
-
-  const member = await User.findById(memberId);
-  const lead = await User.findById(leadId);
-
-  if (!member || !lead) {
-    return res.status(404).json({ message: "Member or Lead not found" });
-  }
-
-  member.lead = lead._id;
-  await member.save();
-
-  res.json(member);
-});
-
-// PUT /api/admin/teams/members/:memberId
-router.put("/teams/members/:memberId", async (req, res) => {
-  const { memberId } = req.params;
-  const { displayName, mobile, studentId, studentEmail } = req.body;
-
-  const member = await User.findByIdAndUpdate(
-    memberId,
-    { displayName, mobile, studentId, studentEmail },
-    { new: true, runValidators: true }
-  );
-
-  if (!member) {
-    return res.status(404).json({ message: "Member not found" });
-  }
-
-  res.json(member);
-});
-
-// ========== ADMIN CONFERENCES VIEW ==========
+// ========== CONFERENCES ==========
 
 // GET /api/admin/conferences
 router.get("/conferences", async (req, res) => {
-  const confs = await Conference.find()
-    .populate("lead", "email displayName")
-    .populate("authors", "email displayName");
-  res.json(confs);
+  try {
+    const confs = await Conference.find()
+      .populate("lead", "displayName email")
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
+    res.json(confs);
+  } catch (err) {
+    console.error("Get conferences error:", err.message);
+    res.status(500).json({ message: "Failed to fetch conferences" });
+  }
 });
 
 // POST /api/admin/conferences
-// Create a conference for a given lead (admin-side)
 router.post("/conferences", async (req, res) => {
+  const { title, date, link, status, leadId, authorIds } = req.body;
+
+  if (!title || !isValidObjectId(leadId)) {
+    return res.status(400).json({ message: "title and valid leadId are required" });
+  }
+
   try {
-    const { title, date, link, status, leadId, authorIds } = req.body;
-
-    if (!title || !leadId) {
-      return res.status(400).json({ message: "title and leadId are required" });
-    }
-
     const lead = await User.findById(leadId);
     if (!lead || lead.role !== "lead") {
-      return res
-        .status(400)
-        .json({ message: "Lead not found or not a lead user" });
+      return res.status(400).json({ message: "Lead not found or not a lead user" });
+    }
+
+    // Validate authorIds if provided
+    if (authorIds && !Array.isArray(authorIds)) {
+      return res.status(400).json({ message: "authorIds must be an array" });
     }
 
     const conf = await Conference.create({
@@ -388,22 +372,28 @@ router.post("/conferences", async (req, res) => {
 
     res.status(201).json(populated);
   } catch (err) {
-    console.error("Admin create conference error:", err);
+    console.error("Admin create conference error:", err.message);
     res.status(500).json({ message: "Failed to create conference" });
   }
 });
 
 // PUT /api/admin/conferences/:id
-// Update any conference (title/date/link/authors/status)
 router.put("/conferences/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { title, date, link, status, authorIds } = req.body;
+  if (!isValidObjectId(req.params.id)) return badId(res);
 
-    const conf = await Conference.findById(id);
-    if (!conf) {
-      return res.status(404).json({ message: "Conference not found" });
-    }
+  const { title, date, link, status, authorIds } = req.body;
+  const VALID_STATUSES = ["submitted", "accepted", "presented", "published"];
+
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ message: "Invalid conference status" });
+  }
+  if (authorIds && !Array.isArray(authorIds)) {
+    return res.status(400).json({ message: "authorIds must be an array" });
+  }
+
+  try {
+    const conf = await Conference.findById(req.params.id);
+    if (!conf) return res.status(404).json({ message: "Conference not found" });
 
     if (title !== undefined) conf.title = title;
     if (date !== undefined) conf.date = date;
@@ -419,25 +409,23 @@ router.put("/conferences/:id", async (req, res) => {
 
     res.json(populated);
   } catch (err) {
-    console.error("Admin update conference error:", err);
+    console.error("Admin update conference error:", err.message);
     res.status(500).json({ message: "Failed to update conference" });
   }
 });
 
 // DELETE /api/admin/conferences/:id
-// Remove a conference
 router.delete("/conferences/:id", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
   try {
-    const { id } = req.params;
-
-    const conf = await Conference.findByIdAndDelete(id);
-    if (!conf) {
-      return res.status(404).json({ message: "Conference not found" });
-    }
-
+    const conf = await Conference.findByIdAndDelete(req.params.id);
+    if (!conf) return res.status(404).json({ message: "Conference not found" });
     res.json({ message: "Conference deleted" });
   } catch (err) {
-    console.error("Admin delete conference error:", err);
+    console.error("Admin delete conference error:", err.message);
     res.status(500).json({ message: "Failed to delete conference" });
   }
 });
+
+export default router;

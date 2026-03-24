@@ -1,145 +1,131 @@
 // backend/routes/leadRoutes.js
 import express from "express";
+import mongoose from "mongoose";
 import User from "../models/User.js";
 import Conference from "../models/Conference.js";
 import Author from "../models/Author.js";
-import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
+import {
+  verifyFirebaseToken,
+  requireLead,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 router.use(verifyFirebaseToken);
 
-// Helper: ensure user is a lead
-function requireLead(req, res, next) {
-  if (!req.user || req.user.role !== "lead") {
-    return res.status(403).json({ message: "Lead role required" });
-  }
-  next();
+// ---------- HELPER ----------
+function isValidObjectId(id) {
+  return mongoose.Types.ObjectId.isValid(id);
 }
 
 /* ============================
- * TEAM (LEAD SIDE)
+ * TEAM
  * ==========================*/
 
 // GET /api/lead/team
 router.get("/team", requireLead, async (req, res) => {
   try {
-    const lead = await User.findById(req.user._id);
-
+    const lead = await User.findById(req.user._id).select(
+      "_id displayName email"
+    );
     const members = await User.find({ lead: lead._id }).select(
       "displayName email mobile studentId studentEmail"
     );
-
-    res.json({
-      lead: {
-        _id: lead._id,
-        displayName: lead.displayName,
-        email: lead.email,
-      },
-      members,
-    });
+    res.json({ lead, members });
   } catch (err) {
-    console.error("Error loading team:", err);
+    console.error("Error loading team:", err.message);
     res.status(500).json({ message: "Failed to load team" });
   }
 });
 
 // POST /api/lead/members
-// Lead can create a new member under themselves OR attach an existing user by email
 router.post("/members", requireLead, async (req, res) => {
+  const { displayName, email, mobile, studentId, studentEmail } = req.body;
+
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ message: "Valid email is required" });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
   try {
-    const { displayName, email, mobile, studentId, studentEmail } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    let user = await User.findOne({ email });
+    let user = await User.findOne({ email: normalizedEmail });
 
     if (user) {
-      // If user is already under another lead, block
       if (user.lead && !user.lead.equals(req.user._id)) {
         return res
           .status(400)
           .json({ message: "User already assigned under another lead" });
       }
-
-      // Attach/update under current lead
       user.lead = req.user._id;
       user.role = user.role || "member";
-      if (displayName) user.displayName = displayName;
-      if (mobile) user.mobile = mobile;
-      if (studentId) user.studentId = studentId;
-      if (studentEmail) user.studentEmail = studentEmail;
-
+      if (displayName) user.displayName = displayName.slice(0, 100);
+      if (mobile) user.mobile = mobile.slice(0, 20);
+      if (studentId) user.studentId = studentId.slice(0, 50);
+      if (studentEmail) user.studentEmail = studentEmail.slice(0, 200);
       await user.save();
     } else {
-      // Create brand new member user
       user = await User.create({
-        email,
-        displayName: displayName || email,
-        mobile: mobile || "",
-        studentId: studentId || "",
-        studentEmail: studentEmail || "",
+        email: normalizedEmail,
+        displayName: displayName ? displayName.slice(0, 100) : normalizedEmail,
+        mobile: mobile?.slice(0, 20) || "",
+        studentId: studentId?.slice(0, 50) || "",
+        studentEmail: studentEmail?.slice(0, 200) || "",
         lead: req.user._id,
         role: "member",
       });
     }
 
-    const memberResponse = {
+    res.status(201).json({
       _id: user._id,
       displayName: user.displayName,
       email: user.email,
       mobile: user.mobile,
       studentId: user.studentId,
       studentEmail: user.studentEmail,
-    };
-
-    res.status(201).json(memberResponse);
+    });
   } catch (err) {
-    console.error("Error creating member by lead:", err);
-    return res
-      .status(500)
-      .json({ message: "Failed to create member under this lead" });
+    console.error("Error creating member:", err.message);
+    res.status(500).json({ message: "Failed to create member" });
   }
 });
 
 // PUT /api/lead/members/:memberId
-// Lead can update only members that are under them
 router.put("/members/:memberId", requireLead, async (req, res) => {
   const { memberId } = req.params;
+  if (!isValidObjectId(memberId)) {
+    return res.status(400).json({ message: "Invalid member ID" });
+  }
+
   const { displayName, mobile, studentId, studentEmail } = req.body;
 
   try {
     const member = await User.findOneAndUpdate(
-      { _id: memberId, lead: req.user._id },
+      { _id: memberId, lead: req.user._id }, // ownership check
       {
-        ...(displayName !== undefined && { displayName }),
-        ...(mobile !== undefined && { mobile }),
-        ...(studentId !== undefined && { studentId }),
-        ...(studentEmail !== undefined && { studentEmail }),
+        ...(displayName !== undefined && { displayName: displayName.slice(0, 100) }),
+        ...(mobile !== undefined && { mobile: mobile.slice(0, 20) }),
+        ...(studentId !== undefined && { studentId: studentId.slice(0, 50) }),
+        ...(studentEmail !== undefined && { studentEmail: studentEmail.slice(0, 200) }),
       },
       { new: true }
     ).select("displayName email mobile studentId studentEmail");
 
     if (!member) {
-      return res.status(404).json({
-        message: "Member not found or not assigned under this lead",
-      });
+      return res.status(404).json({ message: "Member not found or not under this lead" });
     }
-
     res.json(member);
   } catch (err) {
-    console.error("Error updating member by lead:", err);
-    return res.status(500).json({ message: "Failed to update member" });
+    console.error("Error updating member:", err.message);
+    res.status(500).json({ message: "Failed to update member" });
   }
 });
 
 /* ============================
- * AUTHORS (LEAD SIDE)
+ * AUTHORS
  * ==========================*/
 
-// GET /api/lead/authors  → list authors created by this lead
+// GET /api/lead/authors
 router.get("/authors", requireLead, async (req, res) => {
   try {
     const authors = await Author.find({ lead: req.user._id }).sort({
@@ -147,64 +133,65 @@ router.get("/authors", requireLead, async (req, res) => {
     });
     res.json(authors);
   } catch (err) {
-    console.error("Error loading authors:", err);
+    console.error("Error loading authors:", err.message);
     res.status(500).json({ message: "Failed to load authors" });
   }
 });
 
-// POST /api/lead/authors  → create a new author under this lead
+// POST /api/lead/authors
 router.post("/authors", requireLead, async (req, res) => {
-  try {
-    const { name, email, affiliation } = req.body;
-    if (!name) {
-      return res.status(400).json({ message: "Author name is required" });
-    }
+  const { name, email, affiliation } = req.body;
 
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ message: "Author name is required" });
+  }
+
+  try {
     const author = await Author.create({
       lead: req.user._id,
-      name,
-      email: email || "",
-      affiliation: affiliation || "",
+      name: name.slice(0, 100),
+      email: email?.slice(0, 200) || "",
+      affiliation: affiliation?.slice(0, 200) || "",
     });
-
     res.status(201).json(author);
   } catch (err) {
-    console.error("Error creating author:", err);
+    console.error("Error creating author:", err.message);
     res.status(500).json({ message: "Failed to create author" });
   }
 });
 
-// PUT /api/lead/authors/:id  → update an author owned by this lead
+// PUT /api/lead/authors/:id
 router.put("/authors/:id", requireLead, async (req, res) => {
   const { id } = req.params;
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({ message: "Invalid author ID" });
+  }
+
   const { name, email, affiliation } = req.body;
 
   try {
     const author = await Author.findOneAndUpdate(
-      { _id: id, lead: req.user._id },
+      { _id: id, lead: req.user._id }, // ownership check
       {
-        ...(name !== undefined && { name }),
-        ...(email !== undefined && { email }),
-        ...(affiliation !== undefined && { affiliation }),
+        ...(name !== undefined && { name: name.slice(0, 100) }),
+        ...(email !== undefined && { email: email.slice(0, 200) }),
+        ...(affiliation !== undefined && { affiliation: affiliation.slice(0, 200) }),
       },
       { new: true }
     );
 
     if (!author) {
-      return res
-        .status(404)
-        .json({ message: "Author not found for this lead" });
+      return res.status(404).json({ message: "Author not found for this lead" });
     }
-
     res.json(author);
   } catch (err) {
-    console.error("Error updating author:", err);
+    console.error("Error updating author:", err.message);
     res.status(500).json({ message: "Failed to update author" });
   }
 });
 
 /* ============================
- * CONFERENCES (LEAD SIDE)
+ * CONFERENCES
  * ==========================*/
 
 // GET /api/lead/conferences
@@ -213,19 +200,28 @@ router.get("/conferences", requireLead, async (req, res) => {
     const confs = await Conference.find({ lead: req.user._id })
       .populate("authors", "displayName email")
       .populate("extraAuthors", "name email affiliation");
-
     res.json(confs);
   } catch (err) {
-    console.error("Error loading conferences:", err);
+    console.error("Error loading conferences:", err.message);
     res.status(500).json({ message: "Failed to load conferences" });
   }
 });
 
 // POST /api/lead/conferences
 router.post("/conferences", requireLead, async (req, res) => {
-  try {
-    const { title, date, link, authorIds, extraAuthorIds } = req.body;
+  const { title, date, link, authorIds, extraAuthorIds } = req.body;
 
+  if (!title || typeof title !== "string") {
+    return res.status(400).json({ message: "Conference title is required" });
+  }
+  if (authorIds && !Array.isArray(authorIds)) {
+    return res.status(400).json({ message: "authorIds must be an array" });
+  }
+  if (extraAuthorIds && !Array.isArray(extraAuthorIds)) {
+    return res.status(400).json({ message: "extraAuthorIds must be an array" });
+  }
+
+  try {
     const conf = await Conference.create({
       title,
       date,
@@ -242,7 +238,7 @@ router.post("/conferences", requireLead, async (req, res) => {
 
     res.status(201).json(populated);
   } catch (err) {
-    console.error("Error creating conference:", err);
+    console.error("Error creating conference:", err.message);
     res.status(500).json({ message: "Failed to create conference" });
   }
 });
@@ -250,11 +246,26 @@ router.post("/conferences", requireLead, async (req, res) => {
 // PUT /api/lead/conferences/:id
 router.put("/conferences/:id", requireLead, async (req, res) => {
   const { id } = req.params;
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({ message: "Invalid conference ID" });
+  }
+
   const { title, date, link, authorIds, extraAuthorIds, status } = req.body;
+  const VALID_STATUSES = ["submitted", "accepted", "presented", "published"];
+
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ message: "Invalid conference status" });
+  }
+  if (authorIds && !Array.isArray(authorIds)) {
+    return res.status(400).json({ message: "authorIds must be an array" });
+  }
+  if (extraAuthorIds && !Array.isArray(extraAuthorIds)) {
+    return res.status(400).json({ message: "extraAuthorIds must be an array" });
+  }
 
   try {
     const conf = await Conference.findOneAndUpdate(
-      { _id: id, lead: req.user._id }, // ensure lead owns it
+      { _id: id, lead: req.user._id }, // ownership check
       {
         ...(title !== undefined && { title }),
         ...(date !== undefined && { date }),
@@ -269,12 +280,11 @@ router.put("/conferences/:id", requireLead, async (req, res) => {
       .populate("extraAuthors", "name email affiliation");
 
     if (!conf) {
-      return res.status(404).json({ message: "Conference not found" });
+      return res.status(404).json({ message: "Conference not found or not owned by this lead" });
     }
-
     res.json(conf);
   } catch (err) {
-    console.error("Error updating conference:", err);
+    console.error("Error updating conference:", err.message);
     res.status(500).json({ message: "Failed to update conference" });
   }
 });
