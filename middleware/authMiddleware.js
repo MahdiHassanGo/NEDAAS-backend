@@ -1,4 +1,3 @@
-// backend/middleware/authMiddleware.js
 import admin from "../firebaseAdmin.js";
 import User from "../models/User.js";
 
@@ -21,8 +20,11 @@ async function verifyFirebaseToken(req, res, next) {
     const decoded = await admin.auth().verifyIdToken(token);
     const { uid, email, name } = decoded;
 
-    const normalizedEmail = email?.trim().toLowerCase() || "";
-    const autoRole = normalizedEmail === ROOT_ADMIN_EMAIL ? "admin" : "member";
+    const normalizedEmail = email?.trim().toLowerCase();
+
+    if (!normalizedEmail) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
 
     let user = null;
 
@@ -30,37 +32,43 @@ async function verifyFirebaseToken(req, res, next) {
       user = await User.findOne({ uid });
     }
 
-    if (!user && normalizedEmail) {
+    if (!user) {
       user = await User.findOne({ email: normalizedEmail });
-
-      if (user && uid && !user.uid) {
-        user.uid = uid;
-      }
     }
 
+    // Reject unknown users
     if (!user) {
-      user = await User.create({
-        uid,
-        email: normalizedEmail,
-        displayName: name || normalizedEmail || "Unnamed User",
-        role: autoRole,
+      return res.status(403).json({
+        message:
+          "Your email is not authorized yet. Please contact admin to add you first.",
       });
-    } else {
-      // keep root admin always admin
-      if (normalizedEmail === ROOT_ADMIN_EMAIL && user.role !== "admin") {
-        user.role = "admin";
-      }
+    }
 
-      if (!user.email && normalizedEmail) user.email = normalizedEmail;
-      if (!user.displayName && name) user.displayName = name;
+    let changed = false;
 
+    if (!user.uid && uid) {
+      user.uid = uid;
+      changed = true;
+    }
+
+    if (name && user.displayName !== name) {
+      user.displayName = name;
+      changed = true;
+    }
+
+    if (normalizedEmail === ROOT_ADMIN_EMAIL && user.role !== "admin") {
+      user.role = "admin";
+      changed = true;
+    }
+
+    if (changed) {
       await user.save();
     }
 
     req.user = user;
     next();
   } catch (err) {
-    console.error("Token verification error:", err);
+    console.error("Token verification error:", err.message);
     return res.status(401).json({ message: "Invalid token" });
   }
 }
@@ -88,7 +96,9 @@ function requireDirector(req, res, next) {
 
 function requireAdminOrDirector(req, res, next) {
   if (!req.user || !["admin", "director"].includes(req.user.role)) {
-    return res.status(403).json({ message: "Admin or director access required" });
+    return res
+      .status(403)
+      .json({ message: "Admin or director access required" });
   }
   next();
 }

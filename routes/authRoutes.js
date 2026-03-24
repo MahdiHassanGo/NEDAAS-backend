@@ -6,26 +6,21 @@ import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-const ADMIN_EMAILS = new Set(
-  (process.env.ADMIN_EMAILS || "mahdiasif78@gmail.com")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-);
+const ROOT_ADMIN_EMAIL = (
+  process.env.ROOT_ADMIN_EMAIL || "mahdiasif78@gmail.com"
+)
+  .trim()
+  .toLowerCase();
 
 function isMongoConnected() {
   return mongoose.connection.readyState === 1;
-}
-
-function isAdminEmail(email) {
-  return ADMIN_EMAILS.has(email?.toLowerCase());
 }
 
 router.post("/login", async (req, res) => {
   try {
     const { idToken } = req.body;
 
-    if (!idToken || typeof idToken !== "string" || idToken.length < 20) {
+    if (!idToken || typeof idToken !== "string") {
       return res.status(400).json({ message: "Valid ID token is required" });
     }
 
@@ -33,19 +28,8 @@ router.post("/login", async (req, res) => {
       return res.status(500).json({ message: "Auth service unavailable" });
     }
 
-    let decodedToken;
-    try {
-      decodedToken = await admin.auth().verifyIdToken(idToken, true);
-    } catch (firebaseError) {
-      return res.status(401).json({
-        message:
-          firebaseError.code === "auth/id-token-expired"
-            ? "Token expired – please sign in again"
-            : "Invalid or expired token",
-      });
-    }
-
-    const { uid, email, name } = decodedToken;
+    const decoded = await admin.auth().verifyIdToken(idToken, true);
+    const { uid, email, name } = decoded;
 
     if (!uid || !email) {
       return res.status(400).json({ message: "Token missing required fields" });
@@ -55,40 +39,38 @@ router.post("/login", async (req, res) => {
       return res.status(500).json({ message: "Database unavailable" });
     }
 
-    const normalizedEmail = email.toLowerCase();
-    const adminFlag = isAdminEmail(normalizedEmail);
+    const normalizedEmail = email.trim().toLowerCase();
 
     let user = await User.findOne({ email: normalizedEmail });
 
+    // Reject unknown users
     if (!user) {
-      user = new User({
-        uid,
-        email: normalizedEmail,
-        displayName: name || null,
-        role: adminFlag ? "admin" : "member",
+      return res.status(403).json({
+        message:
+          "Your email is not authorized yet. Please contact admin to add you first.",
       });
+    }
+
+    let changed = false;
+
+    if (!user.uid && uid) {
+      user.uid = uid;
+      changed = true;
+    }
+
+    if (name && user.displayName !== name) {
+      user.displayName = name;
+      changed = true;
+    }
+
+    // Always force configured root admin email to admin
+    if (normalizedEmail === ROOT_ADMIN_EMAIL && user.role !== "admin") {
+      user.role = "admin";
+      changed = true;
+    }
+
+    if (changed) {
       await user.save();
-    } else {
-      let changed = false;
-
-      if (!user.uid && uid) {
-        user.uid = uid;
-        changed = true;
-      }
-
-      if (adminFlag && user.role !== "admin") {
-        user.role = "admin";
-        changed = true;
-      }
-
-      if (!user.displayName && name) {
-        user.displayName = name;
-        changed = true;
-      }
-
-      if (changed) {
-        await user.save();
-      }
     }
 
     return res.status(200).json({
@@ -101,8 +83,8 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ /api/auth/login error:", error.message);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error("Auth login error:", error.message);
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
 });
 
@@ -118,7 +100,7 @@ router.get("/me", verifyFirebaseToken, async (req, res) => {
 
     res.json(user);
   } catch (err) {
-    console.error("❌ /api/auth/me error:", err.message);
+    console.error("/api/auth/me error:", err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
