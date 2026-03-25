@@ -36,7 +36,7 @@ async function verifyFirebaseToken(req, res, next) {
       user = await User.findOne({ email: normalizedEmail });
     }
 
-    // Reject unknown users — admin must add them first
+    // Reject unknown users
     if (!user) {
       return res.status(403).json({
         message:
