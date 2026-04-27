@@ -34,6 +34,8 @@ const DEFAULT_ORIGINS = [
   "https://nedaas-bf431.web.app",
   "https://nedaas-bf431.firebaseapp.com",
   "https://nedaas.netlify.app",
+  "http://nedaas.org",
+  "https://nedaas.org",
 ];
 
 const corsOptions = {
