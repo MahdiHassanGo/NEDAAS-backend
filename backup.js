@@ -33,7 +33,6 @@ const DEFAULT_ORIGINS = [
   "http://localhost:5173",
   "https://nedaas-bf431.web.app",
   "https://nedaas-bf431.firebaseapp.com",
-  "https://nedaas.netlify.app",
 ];
 
 const corsOptions = {
