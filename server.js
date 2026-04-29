@@ -37,6 +37,7 @@ const DEFAULT_ORIGINS = [
   "http://nedaas.org",
   "https://nedaas.org",
   "https://nedaas-react-3sry.vercel.app",
+  "https://www.nedaas.org",
 ];
 
 const corsOptions = {
