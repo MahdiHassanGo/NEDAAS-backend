@@ -340,10 +340,10 @@ router.get("/conferences", async (req, res) => {
 
 // POST /api/admin/conferences
 router.post("/conferences", async (req, res) => {
-  const { title, date, link, status, leadId, authorIds } = req.body;
+  const { name, title, date, link, status, leadId, authorIds, extraAuthorIds } = req.body;
 
-  if (!title || !isValidObjectId(leadId)) {
-    return res.status(400).json({ message: "title and valid leadId are required" });
+  if (!name || !title || !isValidObjectId(leadId)) {
+    return res.status(400).json({ message: "name, title and valid leadId are required" });
   }
 
   try {
@@ -356,19 +356,25 @@ router.post("/conferences", async (req, res) => {
     if (authorIds && !Array.isArray(authorIds)) {
       return res.status(400).json({ message: "authorIds must be an array" });
     }
+    if (extraAuthorIds && !Array.isArray(extraAuthorIds)) {
+      return res.status(400).json({ message: "extraAuthorIds must be an array" });
+    }
 
     const conf = await Conference.create({
+      name: name.slice(0, 100),
       title,
       date,
       link,
       lead: lead._id,
       authors: authorIds || [],
+      extraAuthors: extraAuthorIds || [],
       status: status || "submitted",
     });
 
     const populated = await Conference.findById(conf._id)
       .populate("lead", "displayName email")
-      .populate("authors", "displayName email");
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
 
     res.status(201).json(populated);
   } catch (err) {
@@ -381,7 +387,7 @@ router.post("/conferences", async (req, res) => {
 router.put("/conferences/:id", async (req, res) => {
   if (!isValidObjectId(req.params.id)) return badId(res);
 
-  const { title, date, link, status, authorIds } = req.body;
+  const { name, title, date, link, status, authorIds, extraAuthorIds } = req.body;
   const VALID_STATUSES = ["submitted", "accepted", "presented", "published"];
 
   if (status && !VALID_STATUSES.includes(status)) {
@@ -390,22 +396,28 @@ router.put("/conferences/:id", async (req, res) => {
   if (authorIds && !Array.isArray(authorIds)) {
     return res.status(400).json({ message: "authorIds must be an array" });
   }
+  if (extraAuthorIds && !Array.isArray(extraAuthorIds)) {
+    return res.status(400).json({ message: "extraAuthorIds must be an array" });
+  }
 
   try {
     const conf = await Conference.findById(req.params.id);
     if (!conf) return res.status(404).json({ message: "Conference not found" });
 
+    if (name !== undefined) conf.name = name.slice(0, 100);
     if (title !== undefined) conf.title = title;
     if (date !== undefined) conf.date = date;
     if (link !== undefined) conf.link = link;
     if (status !== undefined) conf.status = status;
     if (authorIds !== undefined) conf.authors = authorIds;
+    if (extraAuthorIds !== undefined) conf.extraAuthors = extraAuthorIds;
 
     await conf.save();
 
     const populated = await Conference.findById(conf._id)
       .populate("lead", "displayName email")
-      .populate("authors", "displayName email");
+      .populate("authors", "displayName email")
+      .populate("extraAuthors", "name email affiliation");
 
     res.json(populated);
   } catch (err) {
@@ -425,6 +437,79 @@ router.delete("/conferences/:id", async (req, res) => {
   } catch (err) {
     console.error("Admin delete conference error:", err.message);
     res.status(500).json({ message: "Failed to delete conference" });
+  }
+});
+
+// ========== AUTHORS ==========
+
+// GET /api/admin/authors
+router.get("/authors", async (req, res) => {
+  try {
+    const authors = await Author.find().sort({ name: 1 });
+    res.json(authors);
+  } catch (err) {
+    console.error("Get authors error:", err.message);
+    res.status(500).json({ message: "Failed to fetch authors" });
+  }
+});
+
+// POST /api/admin/authors
+router.post("/authors", async (req, res) => {
+  const { name, email, affiliation } = req.body;
+
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ message: "Author name is required" });
+  }
+
+  try {
+    const author = await Author.create({
+      name: name.slice(0, 100),
+      email: email?.slice(0, 200) || "",
+      affiliation: affiliation?.slice(0, 200) || "",
+    });
+    res.status(201).json(author);
+  } catch (err) {
+    console.error("Error creating author:", err.message);
+    res.status(500).json({ message: "Failed to create author" });
+  }
+});
+
+// PUT /api/admin/authors/:id
+router.put("/authors/:id", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
+  const { name, email, affiliation } = req.body;
+
+  try {
+    const author = await Author.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...(name !== undefined && { name: name.slice(0, 100) }),
+        ...(email !== undefined && { email: email.slice(0, 200) }),
+        ...(affiliation !== undefined && { affiliation: affiliation.slice(0, 200) }),
+      },
+      { new: true }
+    );
+
+    if (!author) return res.status(404).json({ message: "Author not found" });
+    res.json(author);
+  } catch (err) {
+    console.error("Error updating author:", err.message);
+    res.status(500).json({ message: "Failed to update author" });
+  }
+});
+
+// DELETE /api/admin/authors/:id
+router.delete("/authors/:id", async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return badId(res);
+
+  try {
+    const author = await Author.findByIdAndDelete(req.params.id);
+    if (!author) return res.status(404).json({ message: "Author not found" });
+    res.json({ message: "Author deleted" });
+  } catch (err) {
+    console.error("Error deleting author:", err.message);
+    res.status(500).json({ message: "Failed to delete author" });
   }
 });
 

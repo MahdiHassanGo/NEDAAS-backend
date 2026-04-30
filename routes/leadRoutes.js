@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import Conference from "../models/Conference.js";
 import Author from "../models/Author.js";
+import Publication from "../models/Publication.js";
 import {
   verifyFirebaseToken,
   requireLead,
@@ -197,9 +198,12 @@ router.put("/authors/:id", requireLead, async (req, res) => {
 // GET /api/lead/conferences
 router.get("/conferences", requireLead, async (req, res) => {
   try {
-    const confs = await Conference.find({ lead: req.user._id })
+    // Leads can see ALL conferences from all leads
+    const confs = await Conference.find({})
       .populate("authors", "displayName email")
-      .populate("extraAuthors", "name email affiliation");
+      .populate("extraAuthors", "name email affiliation")
+      .populate("lead", "displayName email") // Include lead info
+      .sort({ createdAt: -1 });
     res.json(confs);
   } catch (err) {
     console.error("Error loading conferences:", err.message);
@@ -209,8 +213,11 @@ router.get("/conferences", requireLead, async (req, res) => {
 
 // POST /api/lead/conferences
 router.post("/conferences", requireLead, async (req, res) => {
-  const { title, date, link, authorIds, extraAuthorIds } = req.body;
+  const { name, title, date, link, authorIds, extraAuthorIds } = req.body;
 
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ message: "Conference name is required" });
+  }
   if (!title || typeof title !== "string") {
     return res.status(400).json({ message: "Conference title is required" });
   }
@@ -223,6 +230,7 @@ router.post("/conferences", requireLead, async (req, res) => {
 
   try {
     const conf = await Conference.create({
+      name: name.slice(0, 100),
       title,
       date,
       link,
@@ -234,7 +242,8 @@ router.post("/conferences", requireLead, async (req, res) => {
 
     const populated = await Conference.findById(conf._id)
       .populate("authors", "displayName email")
-      .populate("extraAuthors", "name email affiliation");
+      .populate("extraAuthors", "name email affiliation")
+      .populate("lead", "displayName email");
 
     res.status(201).json(populated);
   } catch (err) {
@@ -250,7 +259,7 @@ router.put("/conferences/:id", requireLead, async (req, res) => {
     return res.status(400).json({ message: "Invalid conference ID" });
   }
 
-  const { title, date, link, authorIds, extraAuthorIds, status } = req.body;
+  const { name, title, date, link, authorIds, extraAuthorIds, status } = req.body;
   const VALID_STATUSES = ["submitted", "accepted", "presented", "published"];
 
   if (status && !VALID_STATUSES.includes(status)) {
@@ -267,6 +276,7 @@ router.put("/conferences/:id", requireLead, async (req, res) => {
     const conf = await Conference.findOneAndUpdate(
       { _id: id, lead: req.user._id }, // ownership check
       {
+        ...(name !== undefined && { name: name.slice(0, 100) }),
         ...(title !== undefined && { title }),
         ...(date !== undefined && { date }),
         ...(link !== undefined && { link }),
@@ -277,7 +287,8 @@ router.put("/conferences/:id", requireLead, async (req, res) => {
       { new: true }
     )
       .populate("authors", "displayName email")
-      .populate("extraAuthors", "name email affiliation");
+      .populate("extraAuthors", "name email affiliation")
+      .populate("lead", "displayName email");
 
     if (!conf) {
       return res.status(404).json({ message: "Conference not found or not owned by this lead" });
@@ -286,6 +297,64 @@ router.put("/conferences/:id", requireLead, async (req, res) => {
   } catch (err) {
     console.error("Error updating conference:", err.message);
     res.status(500).json({ message: "Failed to update conference" });
+  }
+});
+
+// POST /api/lead/conferences/:id/publish-paper
+// Submit a conference paper to the publication database
+router.post("/conferences/:id/publish-paper", requireLead, async (req, res) => {
+  const { id } = req.params;
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({ message: "Invalid conference ID" });
+  }
+
+  const { title, authors, description, doi, meta, tag, link, linkLabel } = req.body;
+
+  if (!title || !authors || !description) {
+    return res.status(400).json({ message: "Title, authors, and description are required" });
+  }
+
+  try {
+    // Find the conference
+    const conf = await Conference.findOne({ _id: id, lead: req.user._id });
+    if (!conf) {
+      return res.status(404).json({ message: "Conference not found or not owned by this lead" });
+    }
+
+    // Update conference with paper details
+    conf.paper = {
+      title: title.slice(0, 500),
+      authors: authors.slice(0, 500),
+      description: description.slice(0, 2000),
+      doi: doi?.slice(0, 200) || "",
+      meta: meta?.slice(0, 100) || "",
+      tag: tag?.slice(0, 100) || "",
+      link: link?.slice(0, 500) || "",
+      linkLabel: linkLabel?.slice(0, 50) || "View article",
+    };
+    await conf.save();
+
+    // Create publication entry (will be in pending status for admin review)
+    const publication = await Publication.create({
+      meta: meta || "Conference Paper",
+      title: title.slice(0, 500),
+      authors: authors.slice(0, 500),
+      description: description.slice(0, 2000),
+      tag: tag || "Conference",
+      link: link || (doi ? `https://doi.org/${doi}` : ""),
+      linkLabel: linkLabel || "View article",
+      status: "pending", // Admin will review before approving
+      createdBy: req.user._id,
+    });
+
+    res.status(201).json({
+      message: "Paper submitted for publication review",
+      conference: conf,
+      publication: publication,
+    });
+  } catch (err) {
+    console.error("Error publishing paper:", err.message);
+    res.status(500).json({ message: "Failed to publish paper" });
   }
 });
 
