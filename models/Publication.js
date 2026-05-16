@@ -10,6 +10,9 @@ const publicationSchema = new mongoose.Schema(
     tag: { type: String, required: true },
     link: { type: String, required: true },
     linkLabel: { type: String, required: true },
+    quarter: { type: String, enum: ["Q1", "Q2", "Q3", "Q4", "Other"], default: "Other" },
+    publisher: { type: String, default: "Other" },
+    scopusIndexed: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],

@@ -250,7 +250,7 @@ router.get("/publications", async (req, res) => {
 // POST /api/admin/publications
 router.post("/publications", async (req, res) => {
   try {
-    const { meta, title, authors, description, tag, link, linkLabel } = req.body;
+    const { meta, title, authors, description, tag, link, linkLabel, quarter, publisher, scopusIndexed } = req.body;
 
     if (!meta || !title || !authors || !description || !tag || !link) {
       return res.status(400).json({ message: "All required fields must be provided" });
@@ -264,6 +264,9 @@ router.post("/publications", async (req, res) => {
       tag,
       link,
       linkLabel: linkLabel || "View article",
+      quarter: quarter || "Other",
+      publisher: publisher || "Other",
+      scopusIndexed: Boolean(scopusIndexed),
       status: "approved",
       createdBy: req.user._id,
     });
@@ -305,12 +308,23 @@ router.patch("/publications/:id/status", async (req, res) => {
 router.put("/publications/:id", async (req, res) => {
   if (!isValidObjectId(req.params.id)) return badId(res);
 
-  const { meta, title, authors, description, tag, link, linkLabel } = req.body;
+  const { meta, title, authors, description, tag, link, linkLabel, quarter, publisher, scopusIndexed } = req.body;
 
   try {
     const pub = await Publication.findByIdAndUpdate(
       req.params.id,
-      { meta, title, authors, description, tag, link, linkLabel },
+      {
+        meta,
+        title,
+        authors,
+        description,
+        tag,
+        link,
+        linkLabel,
+        quarter: quarter || "Other",
+        publisher: publisher || "Other",
+        scopusIndexed: Boolean(scopusIndexed),
+      },
       { new: true, runValidators: true }
     ).populate("createdBy", "email displayName");
 

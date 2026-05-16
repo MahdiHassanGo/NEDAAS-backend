@@ -13,7 +13,18 @@ router.use(verifyFirebaseToken);
 // POST /api/lead/publications
 router.post("/", requireLead, async (req, res) => {
   try {
-    const { meta, title, authors, description, tag, link, linkLabel } = req.body;
+    const {
+      meta,
+      title,
+      authors,
+      description,
+      tag,
+      link,
+      linkLabel,
+      quarter,
+      publisher,
+      scopusIndexed,
+    } = req.body;
 
     if (!meta || !title || !authors || !description || !tag || !link) {
       return res.status(400).json({ message: "All required fields must be provided" });
@@ -35,6 +46,9 @@ router.post("/", requireLead, async (req, res) => {
       tag,
       link,
       linkLabel: typeof linkLabel === "string" ? linkLabel : "View article",
+      quarter: quarter || "Other",
+      publisher: publisher || "Other",
+      scopusIndexed: Boolean(scopusIndexed),
       status: "pending", // always pending for lead submissions
       createdBy: req.user._id,
     });
