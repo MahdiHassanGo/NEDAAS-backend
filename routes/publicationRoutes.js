@@ -18,4 +18,23 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /api/publications/:id
+// Public route – get detailed view of an approved publication by ID
+router.get("/:id", async (req, res) => {
+  try {
+    const pub = await Publication.findOne({ _id: req.params.id, status: "approved" })
+      .select("-createdBy"); // don't expose internal author references to public
+    if (!pub) {
+      return res.status(404).json({ message: "Publication not found or not approved" });
+    }
+    res.json(pub);
+  } catch (err) {
+    console.error("Get publication details error:", err.message);
+    if (err.name === "CastError") {
+      return res.status(400).json({ message: "Invalid publication ID format" });
+    }
+    res.status(500).json({ message: "Failed to fetch publication details" });
+  }
+});
+
 export default router;
